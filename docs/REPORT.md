@@ -4,7 +4,7 @@
 **Student ID:** 40054836  
 **Course:** COEN-6761  
 **Project:** Robot Simulator  
-**Date:** February 2026
+**Date:** April 8 2026
 
 ---
 
@@ -1097,7 +1097,219 @@ The software meets all predefined quality gates and is ready for release. The un
 
 ---
 
-## 16. Conclusion
+## 16. Addressing QA Team Review Comments
+
+During the peer review phase, our project was assigned to another QA team who performed an independent assessment. Below are the four comments they reported and how each was addressed.
+
+### 16.1 QA Comments Received
+
+| # | QA Comment |
+|---|------------|
+| C1 | Maintain JaCoCo version 0.8.13 or later to ensure full compatibility with Java 25 instrumentation and accurate coverage reporting. |
+| C2 | The current RobotSimulator design integrates parsing, command dispatch, history management, and state updates within a single component. Refactoring these responsibilities into modular units would enhance testability, improve clarity, and strengthen mutation resistance. |
+| C3 | Introduce more precise assertions, particularly for command history behavior and output validation, to improve the detection of subtle faults and reduce surviving conditional mutants. |
+| C4 | Integrate PIT mutation testing as a continuous quality gate within the CI pipeline, especially for command-processing logic, to ensure sustained test effectiveness. |
+
+### 16.2 Comment C1 — JaCoCo Version
+
+**Action:** Updated `jacoco.version` property in `pom.xml` from `0.8.11` to `0.8.13`.
+
+While our project targets Java 11 and is not currently affected by Java 25 instrumentation changes, bumping to the latest supported JaCoCo release is a low-risk, forward-looking improvement. All existing coverage checks continue to pass at the same thresholds after the upgrade.
+
+### 16.3 Comment C2 — Refactoring RobotSimulator
+
+**Action:** Extracted two focused classes from `RobotSimulator`:
+
+| New Class | Responsibility |
+|-----------|----------------|
+| `CommandParser` | Static utility that parses a raw input line into a `ParsedCommand` (command letter + argument text). |
+| `ParsedCommand` | Immutable value object holding the trimmed input, uppercased command, and argument. |
+| `CommandHistory` | Manages the list of recorded commands: `add`, `removeLast` (undo on invalid command), `snapshot`/`replaceWith` (for replay), `clear`, and `getEntries`. |
+
+`RobotSimulator` retains command dispatch and robot/floor orchestration, but no longer performs string parsing or directly manages a raw `ArrayList` of history entries.
+
+**Impact on testability:**
+- `CommandParser` and `CommandHistory` each have their own unit test class (`CommandParserTest`, `CommandHistoryTest`) that verify parsing and history behavior in isolation, without standing up a full simulator.
+- All 128 existing tests continue to pass unchanged; 9 new tests were added for the extracted classes.
+
+### 16.4 Comment C3 — Stronger Assertions
+
+**Action:** Added targeted tests with precise assertions for the extracted modules:
+
+- **`CommandHistoryTest`** asserts **exact list contents and ordering** after sequences of `add`/`removeLast`/`clear`/`replaceWith`, verifying that snapshot isolation holds (modifying a snapshot does not affect internal state).
+- **`CommandParserTest`** asserts **exact field values** (`getTrimmed`, `getCommand`, `getArgument`) for null, blank, single-letter, spaced, and no-space inputs, and verifies `null` return for invalid input.
+- Existing `RobotSimulatorTest` history assertions (e.g. `testHistoryExcludesCommands`, `testHistoryReplay`) continue to validate end-to-end behavior through `processCommand`.
+
+These precise assertions improve mutation detection because a mutant that alters ordering, drops an entry, or changes case will be caught directly rather than passing through a loose `contains` check.
+
+### 16.5 Comment C4 — PIT Mutation Testing in CI
+
+**Action:** Integrated PIT (Pitest) into the Maven build and GitHub Actions CI pipeline.
+
+**Maven configuration (`pom.xml`):**
+- Added `pitest-maven` plugin version **1.18.2** with `pitest-junit5-plugin` **1.2.2** for JUnit 5 support.
+- **Targeted classes:** `com.robot.RobotSimulator`, `com.robot.CommandParser`, `com.robot.CommandHistory` — the command-processing core identified in C2.
+- **All tests** in `com.robot.*` are used to kill mutants.
+- **Quality gate:** `mutationThreshold` property set to **60%** (current baseline kill rate is ~63%).
+- HTML and XML reports are generated under `target/pit-reports/`.
+
+**CI pipeline (`.github/workflows/ci.yml`):**
+
+```yaml
+steps:
+  - name: Unit tests and JaCoCo coverage checks
+    run: mvn -B clean verify
+
+  - name: PIT mutation testing (RobotSimulator, CommandParser, CommandHistory)
+    run: mvn -B pitest:mutationCoverage
+
+  - name: Upload PIT report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: pit-mutation-report
+      path: target/pit-reports/
+```
+
+The pipeline runs on every push and pull request to `main`/`master`. The build **fails** if either JaCoCo coverage thresholds or the PIT mutation score threshold is not met, ensuring both coverage and test effectiveness are continuously enforced.
+
+**PIT results summary (command-processing classes):**
+
+| Metric | Value |
+|--------|-------|
+| Mutations generated | 110 |
+| Mutations killed | 69 |
+| Mutation kill rate | **63%** |
+| Mutation threshold | **60%** |
+| Line coverage (mutated classes) | **83%** |
+| Gate status | **PASS** |
+
+### 16.6 Summary of Changes
+
+| QA Comment | Status | Key Change |
+|------------|--------|------------|
+| C1 — JaCoCo version | **Addressed** | Bumped to 0.8.13 |
+| C2 — Modular refactor | **Addressed** | Extracted `CommandParser`, `ParsedCommand`, `CommandHistory` |
+| C3 — Precise assertions | **Addressed** | Added `CommandParserTest`, `CommandHistoryTest` with exact assertions |
+| C4 — PIT in CI | **Addressed** | `pitest-maven` in POM + GitHub Actions workflow with mutation threshold gate |
+
+---
+
+## 17. AI Tool Interactions for Addressing QA Comments
+
+### Prompt 23: Understanding the QA Feedback
+**User:**
+> Our project was reviewed by another QA team and they left four comments. Can you help me understand what each one means and what we should do about them? The comments are: (1) upgrade JaCoCo to 0.8.13+, (2) refactor RobotSimulator into modular units, (3) introduce more precise assertions for history and output, (4) integrate PIT mutation testing in CI.
+
+**AI Response Summary:**
+- Broke down each comment into what the QA team is asking for and why
+- Recommended prioritizing: JaCoCo bump first (quick win), then tests/assertions, PIT + CI, and finally the refactor
+- Noted that comment C1 is forward-looking (Java 25) even though we target Java 11
+- Explained that PIT (Pitest) is a mutation testing tool that injects faults into bytecode and checks whether tests detect them
+
+---
+
+### Prompt 24: Deciding on Refactoring Scope
+**User:**
+> For comment C2, the QA team says RobotSimulator does too much. What's the best approach — should I do a full rewrite or a minimal extraction? I don't want to break the existing 119 tests.
+
+**AI Response Summary:**
+- Proposed two options: full refactor (extract every concern into its own class) vs. minimal extraction (pull out one or two clear boundaries)
+- Recommended **minimal extraction**: pull out `CommandParser` (parsing) and `CommandHistory` (history management) since they have the clearest boundaries
+- Noted that `RobotSimulator` keeps dispatch and orchestration, which is a valid single responsibility
+- Emphasized that existing tests should not need changes because `processCommand` behavior remains identical
+- Suggested adding new unit tests for the extracted classes to improve mutation resistance (ties into C3)
+
+---
+
+### Prompt 25: Implementing CommandParser and CommandHistory
+**User:**
+> Let's go with the minimal approach. Can you help me create the CommandParser and CommandHistory classes? I want CommandParser to be stateless and CommandHistory to handle all the list operations that are currently inline in RobotSimulator.
+
+**AI Response Summary:**
+- Created `CommandParser` as a utility class with a static `parse()` method that returns `null` for invalid input or a `ParsedCommand` for valid input
+- Created `ParsedCommand` as an immutable value object with `getTrimmed()`, `getCommand()`, `getArgument()`
+- Created `CommandHistory` with `add()`, `removeLast()`, `isEmpty()`, `getEntries()`, `snapshot()`, `clear()`, and `replaceWith()`
+- Updated `RobotSimulator.processCommand()` to delegate to `CommandParser.parse()` and use `CommandHistory` instead of raw `ArrayList`
+- Replay method now uses `snapshot()` / `clear()` / `replaceWith()` instead of copying and reassigning the list
+- Confirmed all 119 existing tests still pass after the refactor
+
+---
+
+### Prompt 26: Writing Tests for Extracted Classes
+**User:**
+> Now I need tests for CommandParser and CommandHistory. The QA team specifically mentioned precise assertions for history behavior. What should I test?
+
+**AI Response Summary:**
+- For `CommandParserTest`: null returns null, blank/whitespace returns null, single letter parses correctly with uppercased command, argument with multiple spaces is trimmed, no-space between command and argument works (e.g., `M5`)
+- For `CommandHistoryTest`: starts empty, add then snapshot returns exact list in order, snapshot is isolated (modifying it doesn't affect internals), `removeLast` on entries and on empty list, `clear` then `replaceWith` restores state
+- Emphasized using `assertEquals` with exact expected lists rather than `contains` or `assertTrue(size > 0)` to catch ordering and content mutants
+- Noted these precise assertions directly address comment C3 about reducing surviving conditional mutants
+
+---
+
+### Prompt 27: Setting Up PIT Mutation Testing
+**User:**
+> For comment C4, how do I add PIT to my Maven build? I want it to focus on command-processing logic only, not Robot or Floor. And what mutation threshold should I set?
+
+**AI Response Summary:**
+- Added `pitest-maven` plugin (1.18.2) with `pitest-junit5-plugin` (1.2.2) dependency for JUnit 5 compatibility
+- Scoped `targetClasses` to `com.robot.RobotSimulator`, `com.robot.CommandParser`, `com.robot.CommandHistory`
+- Used all tests (`com.robot.*`) as target tests since integration tests in `RobotSimulatorTest` also exercise parser and history
+- Suggested running PIT with threshold 0 first to measure the baseline, then setting the gate just below the baseline
+- Baseline came back at ~63% kill rate; recommended setting `mutationThreshold` to 60% as a starting gate
+- Configured HTML + XML output formats, 4 threads, and `withHistory=true` for incremental analysis on reruns
+
+---
+
+### Prompt 28: Creating the CI Pipeline
+**User:**
+> How do I set up GitHub Actions to run both JaCoCo and PIT automatically on every push? I want the build to fail if either gate isn't met.
+
+**AI Response Summary:**
+- Created `.github/workflows/ci.yml` with triggers on push/PR to `main` and `master`
+- Step 1: `mvn -B clean verify` — runs tests, generates JaCoCo report, and enforces coverage thresholds via `jacoco:check`
+- Step 2: `mvn -B pitest:mutationCoverage` — runs mutation testing and fails if kill rate < `pitest.mutationThreshold`
+- Step 3: Upload PIT report as artifact with `if: always()` so the HTML report is available even if the PIT step fails (useful for debugging surviving mutants)
+- Used `actions/setup-java@v4` with Temurin JDK 11 and Maven caching for faster runs
+- Noted that the same two commands can be run locally as a single `mvn -B clean verify pitest:mutationCoverage`
+
+---
+
+## 18. Conclusion
+
+The Robot Simulator project successfully implements all 16 functional requirements and meets all code coverage quality gates:
+
+### Task 1 Achievements
+- ✅ **128 unit tests** — all passing (119 original + 9 new for extracted classes)
+- ✅ **100% requirements coverage** — all 16 requirements verified
+- ✅ **Clean, modular architecture** following SOLID principles
+- ✅ **Comprehensive error handling** with meaningful messages
+- ✅ **Case-insensitive command processing**
+
+### Task 2 Achievements
+- ✅ **JaCoCo code coverage** integrated into Maven build
+- ✅ **96.2% function coverage** (threshold: 80%)
+- ✅ **92.9% statement coverage** (threshold: 80%)
+- ✅ **87.7% path coverage** (threshold: 70%)
+- ✅ **85.7% condition coverage** (threshold: 70%)
+- ✅ **88.6% line coverage** (threshold: 80%)
+- ✅ **Automated quality gates** — build fails if coverage drops below thresholds
+- ✅ **Release approved** — all metrics exceed predefined thresholds
+
+### Task 3 Achievements (QA Review Response)
+- ✅ **JaCoCo upgraded** to 0.8.13 (C1)
+- ✅ **Modular refactoring** — `CommandParser`, `ParsedCommand`, `CommandHistory` extracted (C2)
+- ✅ **Precise assertions** — dedicated test classes with exact value checks (C3)
+- ✅ **PIT mutation testing** — 63% kill rate on command-processing core, 60% threshold gate (C4)
+- ✅ **CI pipeline** — GitHub Actions enforcing JaCoCo + PIT on every push/PR (C4)
+
+The application can be downloaded, compiled, tested, and verified using standard Maven commands:
+```bash
+mvn clean verify                          # Tests + JaCoCo coverage gates
+mvn pitest:mutationCoverage               # PIT mutation testing
+mvn -B clean verify pitest:mutationCoverage  # Full pipeline (same as CI)
+```
 
 The Robot Simulator project successfully implements all 16 functional requirements and meets all code coverage quality gates:
 
@@ -1120,7 +1332,9 @@ The Robot Simulator project successfully implements all 16 functional requiremen
 
 The application can be downloaded, compiled, tested, and verified using standard Maven commands:
 ```bash
-mvn clean verify    # Compile, test, generate coverage, and enforce thresholds
+mvn clean verify                          # Tests + JaCoCo coverage gates
+mvn pitest:mutationCoverage               # PIT mutation testing
+mvn -B clean verify pitest:mutationCoverage  # Full pipeline (same as CI)
 ```
 
 ---

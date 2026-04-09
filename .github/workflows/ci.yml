@@ -1,0 +1,35 @@
+# Continuous integration: tests, JaCoCo coverage gates, PIT mutation testing on command-processing core.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+          cache: maven
+
+      - name: Unit tests and JaCoCo coverage checks
+        run: mvn -B clean verify
+
+      - name: PIT mutation testing (RobotSimulator, CommandParser, CommandHistory)
+        run: mvn -B pitest:mutationCoverage
+
+      - name: Upload PIT report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-mutation-report
+          path: target/pit-reports/

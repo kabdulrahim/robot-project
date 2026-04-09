@@ -7,11 +7,12 @@ import java.util.Scanner;
 /**
  * Main class that runs the robot simulator.
  * Handles user input and executes commands.
+ * Command lines are parsed by {@link CommandParser}; history is stored in {@link CommandHistory}.
  */
 public class RobotSimulator {
     private Robot robot;
     private Floor floor;
-    private List<String> commandHistory;
+    private final CommandHistory commandHistory;
     private boolean initialized;
     private boolean running;
 
@@ -21,7 +22,7 @@ public class RobotSimulator {
     public RobotSimulator() {
         this.robot = new Robot();
         this.floor = null;
-        this.commandHistory = new ArrayList<>();
+        this.commandHistory = new CommandHistory();
         this.initialized = false;
         this.running = true;
     }
@@ -63,7 +64,7 @@ public class RobotSimulator {
      * @return list of executed commands
      */
     public List<String> getCommandHistory() {
-        return new ArrayList<>(commandHistory);
+        return new ArrayList<>(commandHistory.getEntries());
     }
 
     /**
@@ -203,14 +204,13 @@ public class RobotSimulator {
         StringBuilder sb = new StringBuilder();
         sb.append("=== Replaying History ===\n");
 
-        // Save current state
-        List<String> savedHistory = new ArrayList<>(commandHistory);
-        
+        List<String> savedHistory = commandHistory.snapshot();
+
         // Reset for replay
         this.robot = new Robot();
         this.floor = null;
         this.initialized = false;
-        this.commandHistory = new ArrayList<>();
+        commandHistory.clear();
 
         // Replay all commands
         for (String command : savedHistory) {
@@ -222,10 +222,9 @@ public class RobotSimulator {
         }
 
         sb.append("=== End of Replay ===");
-        
-        // Restore history
-        this.commandHistory = savedHistory;
-        
+
+        commandHistory.replaceWith(savedHistory);
+
         return sb.toString();
     }
 
@@ -245,17 +244,17 @@ public class RobotSimulator {
      * @return the result message
      */
     public String processCommand(String input, boolean addToHistory) {
-        if (input == null || input.trim().isEmpty()) {
+        ParsedCommand parsed = CommandParser.parse(input);
+        if (parsed == null) {
             return "Error: Empty command";
         }
 
-        String trimmedInput = input.trim();
-        String command = trimmedInput.substring(0, 1).toUpperCase();
-        String argument = trimmedInput.length() > 1 ? trimmedInput.substring(1).trim() : "";
+        String command = parsed.getCommand();
+        String argument = parsed.getArgument();
 
         // Add to history (except for H, Q, and P commands)
         if (addToHistory && !command.equals("H") && !command.equals("Q") && !command.equals("P")) {
-            commandHistory.add(trimmedInput);
+            commandHistory.add(parsed.getTrimmed());
         }
 
         switch (command) {
@@ -290,9 +289,8 @@ public class RobotSimulator {
                 return replayHistory();
 
             default:
-                // Remove from history if invalid
-                if (addToHistory && !commandHistory.isEmpty()) {
-                    commandHistory.remove(commandHistory.size() - 1);
+                if (addToHistory) {
+                    commandHistory.removeLast();
                 }
                 return "Error: Unknown command '" + command + "'. Valid commands: U, D, R, L, M, P, C, Q, I, H";
         }
